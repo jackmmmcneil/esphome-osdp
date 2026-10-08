@@ -24,7 +24,10 @@ step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
 # ---------------------------------------------------------------- setup ---
 step "ESPHome $ESPHOME_VERSION"
-if [[ ! -x venv/bin/esphome ]] || ! venv/bin/esphome version | grep -q "$ESPHOME_VERSION"; then
+# Rebuild the venv if it's missing, the wrong version, or broken (e.g. its
+# interpreter moved, as happens with a restored CI cache).
+if ! venv/bin/esphome version 2>/dev/null | grep -q "$ESPHOME_VERSION"; then
+  rm -rf venv
   python3 -m venv venv
   venv/bin/pip install -q -U pip setuptools wheel
   venv/bin/pip install -q "esphome==$ESPHOME_VERSION"

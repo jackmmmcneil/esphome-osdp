@@ -8,16 +8,17 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev
-      - name: Cache test build
-        uses: actions/cache@v4
+      # Cache pip downloads (not the venv: a venv is tied to the interpreter path).
+      - name: Cache pip downloads
+        uses: actions/cache@v6
         with:
-          path: tests/.build/venv
-          key: esphome-venv-${{ hashFiles('tests/run_tests.sh') }}
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('tests/run_tests.sh') }}
       - name: Unit, config and end-to-end tests
         run: tests/run_tests.sh --e2e
