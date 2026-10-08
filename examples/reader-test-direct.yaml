@@ -1,0 +1,177 @@
+# Bench test WITHOUT an RS-485 module: the ESP32 drives the reader's A/B
+# pins itself. Outside the RS-485 spec, short bench leads only. When your
+# RS-485 module arrives, use reader-test.yaml instead.
+#
+# Wiring:
+#   GPIO17 --[220 ohm]-- reader A
+#   GPIO18 --[220 ohm]-- reader B
+#   ESP GND ------------ reader -   (same 0 V as the I8016 pin 1)
+#   GPIO16: leave unconnected (RX is read from GPIO17 internally)
+#   Reader + stays on the I8016 12 V. Never connect 12 V to the ESP.
+# The 220 ohm resistors protect the ESP if the reader drives 5 V. Anything
+# from 150-330 ohm is fine; straight wires will most likely work too.
+#
+# On boot it scans every baud rate and address. Watch the log for
+# "FOUND READER: address X at Y baud". If a full pass finds nothing:
+#   - 0 bytes everywhere: check ground and that A/B go to GPIO17/18.
+#   - Bytes but no valid reply: swap the two wires on A and B.
+
+substitutions:
+  name: reader-test
+  osdp_baud: "9600"
+  osdp_address: "0"
+
+esphome:
+  name: ${name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://jackmmmcneil/esphome-osdp@main
+    components: [osdp_cp]
+
+logger:
+  level: VERBOSE        # shows LibOSDP's own messages; drop to DEBUG once working
+  logs:
+    uart_debug: DEBUG
+    esp32.preferences: INFO
+    scheduler: INFO
+    component: INFO
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: ${name} fallback
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    encryption: {}
+
+web_server:
+  port: 80
+  ota: false
+
+uart:
+  id: osdp_bus
+  tx_pin: GPIO17   # bus A
+  rx_pin: GPIO16   # unused in direct_drive; leave unconnected
+  baud_rate: ${osdp_baud}
+  # Raw bytes on the wire. OSDP packets start with 0x53 ('S').
+  # Remove this block once the reader is online; it's noisy.
+  debug:
+    direction: BOTH
+    dummy_receiver: false
+    after:
+      timeout: 20ms
+    sequence:
+      - lambda: UARTDebug::log_hex(direction, bytes, ' ');
+
+osdp_cp:
+  id: reader
+  uart_id: osdp_bus
+  address: ${osdp_address}
+  # Probe every baud rate and address on boot and report where the reader
+  # answers. Once it logs FOUND READER, copy those values into door.yaml.
+  scan: true
+  direct_drive:
+    b_pin: GPIO18  # bus B (inverted copy of TX)
+  idle_color: amber           # amber idle = "the ESP32 is in control"
+  online:
+    name: Reader online
+  secure_channel:
+    name: Reader secure channel
+  last_card:
+    name: Last card
+  on_card:
+    - then:
+        - logger.log:
+            level: INFO
+            format: "CARD %s (%d bits)"
+            args: [card.c_str(), bits]
+        - osdp_cp.led:
+            id: reader
+            color: green
+            duration: 1s
+        - osdp_cp.buzzer:
+            id: reader
+            beeps: 1
+
+# Test only: shows what was typed so you can check every key. Don't keep
+# this in a real install, it publishes codes in clear text.
+key_collector:
+  - id: keypad_test
+    source_id: reader
+    max_length: 12
+    end_keys: "#"
+    end_key_required: false
+    timeout: 5s
+    on_progress:
+      - logger.log:
+          level: INFO
+          format: "KEYS so far: %s"
+          args: [x.c_str()]
+    on_result:
+      - logger.log:
+          level: INFO
+          format: "KEYS entered: %s"
+          args: [x.c_str()]
+      - text_sensor.template.publish:
+          id: last_keys
+          state: !lambda return x;
+      - osdp_cp.buzzer:
+          id: reader
+          beeps: 2
+          on_time: 100ms
+          off_time: 100ms
+    on_timeout:
+      - text_sensor.template.publish:
+          id: last_keys
+          state: !lambda 'return x + " (timeout)";'
+
+text_sensor:
+  - platform: template
+    id: last_keys
+    name: Last keys (test)
+
+button:
+  - platform: template
+    name: LED green
+    on_press:
+      - osdp_cp.led: {id: reader, color: green, duration: 3s}
+  - platform: template
+    name: LED red flash
+    on_press:
+      - osdp_cp.led:
+          id: reader
+          color: red
+          on_time: 200ms
+          off_time: 200ms
+          duration: 3s
+  - platform: template
+    name: LED blue
+    on_press:
+      - osdp_cp.led: {id: reader, color: blue, duration: 3s}
+  - platform: template
+    name: Idle LED off
+    on_press:
+      - osdp_cp.led: {id: reader, color: "off", permanent: true}
+  - platform: template
+    name: Beep once
+    on_press:
+      - osdp_cp.buzzer: {id: reader, beeps: 1, on_time: 300ms}
+  - platform: template
+    name: Beep x3
+    on_press:
+      - osdp_cp.buzzer: {id: reader, beeps: 3, on_time: 100ms, off_time: 100ms}
+  - platform: restart
+    name: Restart

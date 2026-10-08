@@ -1,0 +1,316 @@
+# ESP32 OSDP door controller (tested with an AXIS A4120-E reader)
+#
+# Wiring (esp32dev), as proven on the bench with reader-test.yaml:
+#   GPIO17       -> RS-485 module DI
+#   GPIO16       <- RS-485 module RO, via a divider if the module is 5 V
+#                   (RO -[2x220]- GPIO16 -[4x220]- GND)
+#   GPIO4        -> RS-485 module DE + RE (tied together). Delete
+#                   flow_control_pin below if your module is auto-direction.
+#   5V / VIN     -> RS-485 module VCC
+#   RS-485 A/B   -> A4120-E A/B
+#   GND          -> RS-485 module GND and A4120-E - (one common ground)
+#   GPIO26       -> lock relay module IN (relay switches the strike/mag lock)
+#   Reader +/-   -> 12 V supply. Never connect 12 V to the ESP or the module.
+#
+# Mount the ESP32 and relay on the SECURE side of the door, never in the
+# reader's back box.
+
+substitutions:
+  name: front-door
+  friendly_name: Front Door
+  unlock_time: 5s
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://jackmmmcneil/esphome-osdp@main
+    components: [osdp_cp, door_access]
+
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: ${name} fallback
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+ota:
+  - platform: esphome
+    encryption: {}   # reuses the api encryption key
+
+# Home Assistant time drives schedules (timezone comes from HA). Users with
+# a schedule are denied until the clock is synced; users without one aren't
+# affected.
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# ------------------------------------------------- credential management ---
+# Call these from Home Assistant as actions named esphome.front_door_<action>
+# (Developer Tools > Actions). Each returns success or an error message.
+#
+#   add_user        name, mode (card_or_pin | card_and_pin), master (bool)
+#   set_card        name, card (hex from the "Last card" sensor; "" clears)
+#   set_pin         name, pin (4-8 digits; "" clears)
+#   set_duress_pin  name, pin (opens the door AND raises a silent alert)
+#   set_schedule    name, days (e.g. "tue", "mon-fri", "weekends"),
+#                   start, end ("08:00"); all three "" = any time
+#   enrol_card      name: the next card badged within 30 s is assigned
+#   remove_user     name
+#   list_users      returns all users as JSON (PINs are never returned)
+
+api:
+  encryption:
+    key: !secret api_key
+  actions:
+    - action: add_user
+      variables: {name: string, mode: string, master: bool}
+      then:
+        - api.respond:
+            success: !lambda return id(door).add_user(name, mode, master);
+            error_message: !lambda return id(door).last_error();
+    - action: set_card
+      variables: {name: string, card: string}
+      then:
+        - api.respond:
+            success: !lambda return id(door).set_card(name, card);
+            error_message: !lambda return id(door).last_error();
+    - action: set_pin
+      variables: {name: string, pin: string}
+      then:
+        - api.respond:
+            success: !lambda return id(door).set_pin(name, pin);
+            error_message: !lambda return id(door).last_error();
+    - action: set_duress_pin
+      variables: {name: string, pin: string}
+      then:
+        - api.respond:
+            success: !lambda return id(door).set_duress_pin(name, pin);
+            error_message: !lambda return id(door).last_error();
+    - action: set_schedule
+      variables: {name: string, days: string, start: string, end: string}
+      then:
+        - api.respond:
+            success: !lambda return id(door).set_schedule(name, days, start, end);
+            error_message: !lambda return id(door).last_error();
+    - action: enrol_card
+      variables: {name: string}
+      then:
+        - api.respond:
+            success: !lambda return id(door).start_enrol(name, 30000);
+            error_message: !lambda return id(door).last_error();
+    - action: remove_user
+      variables: {name: string}
+      then:
+        - api.respond:
+            success: !lambda return id(door).remove_user(name);
+            error_message: !lambda return id(door).last_error();
+    - action: list_users
+      supports_response: only
+      then:
+        - api.respond:
+            data: !lambda id(door).users_to_json(root);
+
+# ---------------------------------------------------------------- reader ---
+
+uart:
+  id: osdp_bus
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  # RS-485 DE+RE. The ESP32 UART drives it in hardware (RS-485 half-duplex
+  # mode). Delete this line if your RS-485 module switches direction itself.
+  flow_control_pin: GPIO4
+  baud_rate: 9600
+
+osdp_cp:
+  id: reader
+  uart_id: osdp_bus
+  address: 0
+  # Secure channel: uncomment once plaintext works. With a factory-fresh
+  # reader in install mode, the ESP32 sets this key on the reader automatically.
+  # scbk: !secret osdp_scbk
+  online:
+    name: Reader online
+  secure_channel:
+    name: Reader secure channel
+  last_card:
+    name: Last card
+
+# ---------------------------------------------------------- access logic ---
+# Keypad:
+#   PIN #            unlock
+#   card, PIN #      unlock for card_and_pin users (reader flashes amber)
+#   PIN * code #     command as that user, e.g. 482916*1#  (no unlock)
+#   * code #         command without a PIN, e.g. *0#
+# Built-in command: a master user's PIN*9# toggles lockdown. Every command is
+# also sent to Home Assistant as an esphome.door_command event.
+
+door_access:
+  id: door
+  reader_id: reader
+  time_id: ha_time
+  unlock_time: ${unlock_time}
+  card_pin_timeout: 10s
+  pin_timeout: 5s
+  max_pin_failures: 5
+  lockout_time: 60s
+  idle_color: blue
+  lockdown_color: red
+
+  on_granted:
+    - script.execute: pulse_strike
+    - text_sensor.template.publish:
+        id: last_event
+        state: !lambda 'return "Granted: " + user + " (" + method + ")";'
+    - homeassistant.event:
+        event: esphome.door_access
+        data:
+          door: ${friendly_name}
+          result: granted
+          user: !lambda return user;
+          method: !lambda return method;
+
+  on_denied:
+    - text_sensor.template.publish:
+        id: last_event
+        state: !lambda 'return "Denied: " + (user.empty() ? std::string("unknown") : user) + " (" + reason + ")";'
+    - homeassistant.event:
+        event: esphome.door_access
+        data:
+          door: ${friendly_name}
+          result: denied
+          user: !lambda return user;
+          method: !lambda return method;
+          reason: !lambda return reason;
+          card: !lambda return card;
+
+  on_duress:
+    # Silent: the door opens normally. Build a Home Assistant automation on
+    # this event to notify someone.
+    - homeassistant.event:
+        event: esphome.door_duress
+        data:
+          door: ${friendly_name}
+          user: !lambda return user;
+          method: !lambda return method;
+
+  on_command:
+    - if:
+        condition:
+          lambda: return authenticated && code == "9" && id(door).is_master(user);
+        then:
+          - switch.toggle: lockdown
+    - text_sensor.template.publish:
+        id: last_event
+        state: !lambda 'return "Command *" + code + "# by " + (authenticated ? user : std::string("keypad"));'
+    - homeassistant.event:
+        event: esphome.door_command
+        data:
+          door: ${friendly_name}
+          code: !lambda return code;
+          user: !lambda return user;
+          authenticated: !lambda 'return authenticated ? "true" : "false";'
+
+  on_enrolled:
+    - text_sensor.template.publish:
+        id: last_event
+        state: !lambda 'return "Enrolled card for " + user;'
+    - homeassistant.event:
+        event: esphome.door_enrolled
+        data:
+          door: ${friendly_name}
+          user: !lambda return user;
+          card: !lambda return card;
+
+  on_enrol_failed:
+    - text_sensor.template.publish:
+        id: last_event
+        state: !lambda 'return "Enrol failed for " + user + ": " + reason;'
+
+# ------------------------------------------------- Home Assistant entities ---
+
+switch:
+  - platform: gpio
+    id: door_strike
+    pin: GPIO26        # add "inverted: true" for active-low relay boards
+    restore_mode: ALWAYS_OFF
+    internal: true
+
+  - platform: template
+    id: lockdown
+    name: Lockdown
+    icon: mdi:shield-lock
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: id(door).set_lockdown(true);
+    turn_off_action:
+      - lambda: id(door).set_lockdown(false);
+
+text:
+  - platform: template
+    id: enrol_name
+    name: Enrol name
+    icon: mdi:account-plus
+    optimistic: true
+    mode: text
+    max_length: 24
+    initial_value: ""
+
+button:
+  - platform: template
+    name: Unlock
+    icon: mdi:door-open
+    on_press:
+      - lambda: id(door).remote_unlock("Home Assistant");
+
+  - platform: template
+    name: Enrol card
+    icon: mdi:card-account-details-outline
+    on_press:
+      - lambda: |-
+          if (!id(door).start_enrol(id(enrol_name).state, 30000)) {
+            id(last_event).publish_state("Enrol: " + id(door).last_error());
+          } else {
+            id(last_event).publish_state("Badge a card for " + id(enrol_name).state + " (30 s)");
+          }
+
+  - platform: template
+    name: Cancel enrol
+    icon: mdi:close
+    entity_category: config
+    on_press:
+      - lambda: id(door).cancel_enrol();
+
+text_sensor:
+  - platform: template
+    id: last_event
+    name: Last access event
+    icon: mdi:history
+
+sensor:
+  - platform: template
+    name: Users
+    icon: mdi:account-group
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: return id(door).user_count();
+
+script:
+  - id: pulse_strike
+    mode: restart
+    then:
+      - switch.turn_on: door_strike
+      - delay: ${unlock_time}
+      - switch.turn_off: door_strike

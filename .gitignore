@@ -1,0 +1,6 @@
+# ESPHome
+.esphome/
+secrets.yaml
+# Test build output
+tests/.build/
+__pycache__/
