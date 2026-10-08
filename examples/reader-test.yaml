@@ -1,4 +1,4 @@
-# Bench test: get the ESP32 talking to the AXIS A4120-E.
+# Bench test: get the ESP32 talking to an OSDP reader.
 # No lock, no access logic. Flash this first, prove the reader comes online,
 # then move to door.yaml.
 #

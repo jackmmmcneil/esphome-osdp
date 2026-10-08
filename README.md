@@ -16,13 +16,11 @@ Wi-Fi is down.
   lockdown with master override, learn-mode card enrolment, `*` keypad
   commands, and Home Assistant actions and events for all of it.
 
-Tested with an **AXIS A4120-E** reader on an ESP32 (esp32dev, ESP-IDF). Any
-reader that speaks plain OSDP over RS-485 should work; reports for other
-readers are welcome.
+Works with readers that speak standard OSDP over RS-485, on an ESP32
+(esp32dev, ESP-IDF). Reports of readers you've tested are welcome.
 
-> **Not affiliated with or endorsed by Axis Communications.** AXIS is a
-> trademark of Axis AB. This is a hobby project; read the
-> [security notes](#security-notes) before using it on a door that matters.
+> This is a hobby project; read the [security notes](#security-notes) before
+> using it on a door that matters.
 
 ## Contents
 

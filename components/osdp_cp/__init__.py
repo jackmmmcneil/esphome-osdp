@@ -2,7 +2,7 @@
 
 Wraps LibOSDP v3.2.7 (https://github.com/goToMain/libosdp, Apache-2.0), vendored
 into this folder as libosdp_* files by tools/vendor_libosdp.py, so an ESP32 can poll an
-OSDP reader such as the AXIS A4120-E, receive card reads and keypad presses,
+OSDP reader, receive card reads and keypad presses,
 and drive the reader's LED and buzzer.
 """
 

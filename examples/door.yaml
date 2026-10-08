@@ -1,4 +1,4 @@
-# ESP32 OSDP door controller (tested with an AXIS A4120-E reader)
+# ESP32 OSDP door controller
 #
 # Wiring (esp32dev), as proven on the bench with reader-test.yaml:
 #   GPIO17       -> RS-485 module DI
@@ -7,8 +7,8 @@
 #   GPIO4        -> RS-485 module DE + RE (tied together). Delete
 #                   flow_control_pin below if your module is auto-direction.
 #   5V / VIN     -> RS-485 module VCC
-#   RS-485 A/B   -> A4120-E A/B
-#   GND          -> RS-485 module GND and A4120-E - (one common ground)
+#   RS-485 A/B   -> reader A/B
+#   GND          -> RS-485 module GND and reader - (one common ground)
 #   GPIO26       -> lock relay module IN (relay switches the strike/mag lock)
 #   Reader +/-   -> 12 V supply. Never connect 12 V to the ESP or the module.
 #

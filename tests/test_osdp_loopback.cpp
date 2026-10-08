@@ -92,11 +92,11 @@ static bool run(bool secure, bool scan = false) {
       {(uint8_t) -1, 0, 0},
   };
   osdp_pd_info_t pdi{};
-  pdi.name = "fake-a4120";
+  pdi.name = "sim-reader";
   pdi.baud_rate = 9600;
   pdi.address = 5;
   pdi.flags = secure ? OSDP_FLAG_INSTALL_MODE : 0;
-  pdi.id.vendor_code = 0xACCC8E;
+  pdi.id.vendor_code = 0x000001;
   pdi.cap = caps;
   pdi.channel.recv = pd_recv;
   pdi.channel.send = pd_send;
